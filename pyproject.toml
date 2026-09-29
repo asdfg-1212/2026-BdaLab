@@ -1,0 +1,34 @@
+[project]
+name = "movielens-governance"
+version = "0.1.0"
+description = "MovieLens 第一轮：Agent + Hadoop 数据治理"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic-settings>=2.6,<3",
+  "openai>=1.60,<3",
+  "streamlit>=1.41,<2",
+  "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = ["-p", "no:cacheprovider"]
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = [".runtime", ".venv", ".uv-cache", "artifacts"]
+
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+

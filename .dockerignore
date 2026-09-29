@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+artifacts
+ml-1m
+__pycache__
+.pytest_cache
+.ruff_cache
+.uv-cache
+.runtime
+*.egg-info

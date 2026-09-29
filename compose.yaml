@@ -1,0 +1,31 @@
+services:
+  backend:
+    build: .
+    image: movielens-governance:iteration1
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      ARTIFACT_DIR: /artifacts
+      HADOOP_HOME: /opt/hadoop
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./ml-1m/ml-1m:/data:ro
+      - ./artifacts:/artifacts
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  frontend:
+    image: movielens-governance:iteration1
+    pull_policy: never
+    command: ["streamlit", "run", "frontend/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--browser.gatherUsageStats=false"]
+    environment:
+      BACKEND_URL: http://backend:8000
+      BACKEND_PUBLIC_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy

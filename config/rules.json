@@ -1,0 +1,11 @@
+{
+  "version": "ml1m-default-v1",
+  "history_start": 946684800,
+  "reference_time": 1046476800,
+  "recent_days": 365,
+  "T1": 978307199,
+  "T2": 1009843199,
+  "max_user_id": 6040,
+  "max_movie_id": 3952,
+  "description": "固定历史参照为 2003-03-01 UTC。训练 timestamp<=T1，验证 T1<timestamp<=T2，测试 timestamp>T2。只修复可确定的格式，冲突及非法记录隔离，重复保留一条，不猜测缺失值。"
+}

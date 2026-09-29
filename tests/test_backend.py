@@ -16,6 +16,29 @@ from backend.config import Settings
 from backend.hadoop import HadoopTool, read_json, stage_input, write_json
 from backend.pipeline import execute
 from backend.tasks import TaskManager
+from processing.quality import LIMITATIONS, METHODS
+
+
+@pytest.fixture
+def governance_report():
+    before_scores = dict.fromkeys(METHODS, 80.0)
+    after_scores = dict.fromkeys(METHODS, 100.0)
+    after_scores["Up-to-date"] = 2.2228
+    tables = {t: {"counts": {"rows": 10}} for t in ("users", "movies", "ratings")}
+    return {
+        "manifest": {
+            "task_id": "test-task", "raw_data_version": "test-only-snapshot",
+            "data_version": "clean-test", "rule_version": "ml1m-default-v1",
+            "T1": 978307199, "T2": 1009843199,
+        },
+        "before": {"scores": before_scores, "tables": tables,
+                   "warnings": {"title_year_unverified": 116}},
+        "after": {"scores": after_scores, "tables": tables,
+                  "issues": {}, "warnings": {"zip_unverified": 13}},
+        "delta": {k: after_scores[k] - before_scores[k] for k in METHODS},
+        "disposition": {"tables": {t: {"unchanged": 10} for t in tables}},
+        "methods": METHODS, "limitations": LIMITATIONS,
+    }
 
 
 @pytest.fixture
@@ -88,11 +111,11 @@ def test_concurrent_submit_and_restart(settings):
 
 
 @pytest.mark.parametrize("call_count", [1, 2])
-def test_agent_really_calls_bound_tool(settings, tmp_path, call_count):
+def test_agent_really_calls_bound_tool(settings, tmp_path, call_count, governance_report):
     requests = []
 
     def execute_once(config, directory, update, version):
-        report = {"manifest": {"raw_data_version": "test-only-snapshot"}}
+        report = governance_report
         write_json(directory / "report.json", report)
         return report
 
@@ -141,7 +164,141 @@ def test_agent_really_calls_bound_tool(settings, tmp_path, call_count):
             answer = agent.govern(settings, tmp_path, "清洗并评估", lambda *args: None)
         tool.assert_called_once()
         assert len(requests) == 2
-        assert "实际报告" in answer
+    assert "test-task" in answer
+
+
+def test_governance_summary_cannot_repeat_model_invented_scores(
+    settings, tmp_path, governance_report
+):
+    write_json(tmp_path / "report.json", governance_report)
+    with patch.object(agent, "_run_model", return_value=("五维均为100，年份告警仍有116条", set())):
+        answer = agent.govern(settings, tmp_path, "清洗", lambda *args: None)
+    assert "2.2228" in answer
+    assert "zip_unverified" in answer
+    assert "title_year_unverified" not in answer
+    assert "五维均为100" not in answer
+
+
+def test_follow_up_has_current_evidence_even_when_model_answers_without_tool(
+    settings, tmp_path, governance_report
+):
+    write_json(tmp_path / "report.json", governance_report)
+
+    def respond(request):
+        body = json.loads(request.content)
+        evidence = [m for m in body["messages"] if m["role"] == "tool"]
+        assert evidence, "追问必须先读取本任务证据"
+        assert json.loads(evidence[0]["content"])["after"]["scores"]["Up-to-date"] == 2.2228
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 1, "model": "test",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": "时效性为2.2228。"}}],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        sdk = OpenAI(api_key="test", http_client=transport, max_retries=0)
+        with patch.object(agent, "model", return_value=sdk):
+            assert "2.2228" in agent.follow_up(settings, tmp_path, "时效性多少？", [])
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("工具调用次数超过限制")])
+def test_chat_history_is_atomic_and_errors_are_specific(settings, governance_report, failure):
+    with patch.object(api, "settings", settings), TestClient(api.app) as client:
+        directory = settings.artifact_dir / ("a" * 32)
+        directory.mkdir()
+        write_json(directory / "task.json", {"status": "completed"})
+        write_json(directory / "report.json", governance_report)
+        history = [{"role": "user", "content": "清洗"},
+                   {"role": "assistant", "content": "已完成"}]
+        write_json(directory / "chat.json", history)
+        original = (directory / "chat.json").read_bytes()
+        with patch.object(agent, "follow_up", return_value="证据回答", side_effect=failure):
+            response = client.post(f"/tasks/{directory.name}/chat", json={"message": "为什么？"})
+        if failure:
+            assert response.status_code == 502
+            assert "工具调用次数超过限制" in response.json()["detail"]
+            assert "检查模型服务" not in response.json()["detail"]
+            assert (directory / "chat.json").read_bytes() == original
+        else:
+            assert response.status_code == 200
+            history += [{"role": "user", "content": "为什么？"},
+                        {"role": "assistant", "content": "证据回答"}]
+        assert client.get(f"/tasks/{directory.name}/chat").json() == history
+
+
+def test_blank_followup_is_rejected_without_model_request(settings, governance_report):
+    with patch.object(api, "settings", settings), TestClient(api.app) as client:
+        with patch.object(agent, "follow_up") as followup:
+            response = client.post(f"/tasks/{'a' * 32}/chat", json={"message": "   "})
+        assert response.status_code == 422
+        followup.assert_not_called()
+
+
+def test_followup_anomaly_tool_reads_only_requested_records(settings, tmp_path, governance_report):
+    write_json(tmp_path / "report.json", governance_report)
+    rows = [
+        {"table": "movies", "action": "quarantined", "line": 1},
+        {"table": "ratings", "action": "repaired", "line": 2},
+        {"table": "ratings", "action": "quarantined", "line": 3},
+        {"table": "ratings", "action": "quarantined", "line": 4},
+    ]
+    (tmp_path / "audit.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+    )
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            message = {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "audit-call", "type": "function", "function": {
+                    "name": "read_anomalies",
+                    "arguments": json.dumps({"table": "ratings", "action": "quarantined",
+                                             "limit": 1}),
+                },
+            }]}
+        else:
+            evidence = json.loads(body["messages"][-1]["content"])
+            assert evidence["examples"] == [rows[2]]
+            message = {"role": "assistant", "content": "第3行被隔离。"}
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 1, "model": "test",
+            "choices": [{"index": 0, "message": message,
+                         "finish_reason": "tool_calls" if len(calls) == 1 else "stop"}],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        sdk = OpenAI(api_key="test", http_client=transport, max_retries=0)
+        with patch.object(agent, "model", return_value=sdk):
+            assert "第3行" in agent.follow_up(settings, tmp_path, "一条评分隔离样例", [])
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("AuthenticationError", "认证失败"), ("RateLimitError", "限流"),
+    ("BadRequestError", "HTTP 400"),
+])
+def test_chat_classifies_provider_errors_without_exposing_body(
+    settings, governance_report, kind, expected
+):
+    import openai
+
+    error = getattr(openai, kind)(
+        "private-provider-body", body={"message": "private-provider-body"},
+        response=httpx.Response(400, request=httpx.Request("POST", "https://model.invalid")),
+    )
+    with patch.object(api, "settings", settings), TestClient(api.app) as client:
+        directory = settings.artifact_dir / ("b" * 32)
+        directory.mkdir()
+        write_json(directory / "task.json", {"status": "completed"})
+        write_json(directory / "report.json", governance_report)
+        with patch.object(agent, "follow_up", side_effect=error):
+            response = client.post(f"/tasks/{directory.name}/chat", json={"message": "为什么？"})
+        assert response.status_code == 502
+        assert expected in response.json()["detail"]
+        assert "private-provider-body" not in response.text
+        assert not (directory / "chat.json").exists()
 
 
 def test_stage_preserves_encoding_and_adds_empty_sentinel(tmp_path):

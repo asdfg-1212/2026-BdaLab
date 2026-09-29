@@ -10,7 +10,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./ml-1m/ml-1m:/data:ro
+      - ./ml-1m:/data:ro
       - ./artifacts:/artifacts
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

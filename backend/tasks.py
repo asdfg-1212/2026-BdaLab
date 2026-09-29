@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from backend import agent
+from backend.errors import error_message
 from backend.hadoop import read_json, write_json
 from backend.pipeline import write_report
 
@@ -111,16 +112,7 @@ class TaskManager:
                 )
             else:
                 stage = self.get(directory.name)["stage"]
-                if isinstance(error, (RuntimeError, FileNotFoundError)):
-                    detail = str(error)
-                else:
-                    detail = {
-                        "AuthenticationError": "模型服务认证失败，请检查 LLM_API_KEY。",
-                        "APIConnectionError": "无法连接模型服务，请检查 LLM_BASE_URL 和网络。",
-                        "APITimeoutError": "模型服务响应超时，请稍后重试。",
-                        "RateLimitError": "模型服务限流或额度不足，请检查账户后重试。",
-                        "BadRequestError": "模型服务不接受当前请求，请确认模型支持工具调用。",
-                    }.get(type(error).__name__, f"执行异常：{type(error).__name__}，详见后端日志。")
+                detail = error_message(error)
                 self.change(
                     directory,
                     status="failed",

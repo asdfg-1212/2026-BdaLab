@@ -1,5 +1,6 @@
 """FastAPI 接口：参数校验、任务查询、追问及受限产物下载。"""
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -8,7 +9,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.config import settings
+from backend.errors import error_message
 from backend.tasks import TaskManager
+
+logger = logging.getLogger(__name__)
 
 
 class Message(BaseModel):
@@ -63,14 +67,15 @@ def report(task_id: str, request: Request):
 
 @app.post("/tasks/{task_id}/chat")
 def chat(task_id: str, body: Message, request: Request):
+    if not body.message.strip():
+        raise HTTPException(422, "请求不能为空")
     try:
         return {"answer": request.app.state.tasks.chat(task_id, body.message)}
     except (FileNotFoundError, ValueError):
         raise
     except Exception as error:
-        raise HTTPException(
-            502, f"Agent 追问失败（{type(error).__name__}），请检查模型服务后重试。"
-        ) from error
+        logger.exception("任务 %s 追问失败（%s）", task_id, type(error).__name__)
+        raise HTTPException(502, error_message(error)) from error
 
 
 @app.get("/tasks/{task_id}/chat")

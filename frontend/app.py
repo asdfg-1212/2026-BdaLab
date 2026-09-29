@@ -34,7 +34,10 @@ def reset():
     st.query_params.clear()
 
 
-task_id = st.session_state.get("task_id") or st.query_params.get("task")
+task_id = st.query_params.get("task") or st.session_state.get("task_id")
+if task_id != st.session_state.get("task_id"):
+    for key in ("task_status", "report", "history"):
+        st.session_state.pop(key, None)
 title, action = st.columns([12, 1], vertical_alignment="center")
 with title:
     st.title("MovieLens 数据治理 Agent")
@@ -158,11 +161,10 @@ if task_id and st.session_state.get("task_status") == "completed":
             )
             st.caption("一条记录可能对应多个原因，原因次数不能直接相加作为记录总数。")
 
-        if "history" not in st.session_state:
-            history = request("GET", f"/tasks/{task_id}/chat")
-            if history is not None:
-                st.session_state.history = history
-        with st.expander("Agent 解释与追问记录", expanded=False):
+        history = request("GET", f"/tasks/{task_id}/chat")
+        if history is not None:
+            st.session_state.history = history
+        with st.expander("Agent 解释与追问记录", expanded=True):
             history = st.session_state.get("history", [])
             if history:
                 for message in history:
@@ -172,6 +174,13 @@ if task_id and st.session_state.get("task_status") == "completed":
                 st.write(report.get("explanation", "Agent 解释尚未生成，可以在下方继续追问。"))
 
         st.subheader("结果获取")
+        with st.expander("数据版本与时间边界", expanded=False):
+            st.json(report["manifest"])
+            st.caption("后续迭代须使用同一数据版本及 T1/T2；时间戳单位为秒，时区 UTC。")
+            st.link_button(
+                "下载版本清单 manifest.json",
+                f"{PUBLIC_API}/tasks/{task_id}/files/manifest.json",
+            )
         with st.expander("查看清洗后的数据样例", expanded=False):
             for table, sample in report["samples"].items():
                 st.markdown(f"**{table}.dat**")
@@ -207,10 +216,5 @@ if prompt:
         else:
             answer = request("POST", f"/tasks/{task_id}/chat", json={"message": prompt})
             if answer:
-                st.session_state.setdefault("history", []).extend(
-                    [
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": answer["answer"]},
-                    ]
-                )
+                st.session_state.pop("history", None)
                 st.rerun()

@@ -24,22 +24,24 @@ RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" "uv==0
     && uv venv --python python3 /opt/venv
 ENV PATH=/opt/venv/bin:/opt/hadoop/bin:$PATH
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
-RUN set -eux; \
+RUN --mount=type=cache,id=movielens-hadoop-download,target=/var/cache/hadoop,sharing=locked set -eux; \
+    cd /var/cache/hadoop; \
     archive="hadoop-${HADOOP_VERSION}-lean.tar.gz"; \
+    curl -fSL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 "${HADOOP_FALLBACK}/hadoop-${HADOOP_VERSION}/${archive}.sha512" -o "${archive}.sha512"; \
     downloaded=0; \
     for base in "${HADOOP_MIRROR}" "${HADOOP_FALLBACK}"; do \
-      rm -f /tmp/hadoop.tar.gz /tmp/hadoop.sha512; \
-      if curl -fSL --retry 2 --connect-timeout 10 "${base}/hadoop-${HADOOP_VERSION}/${archive}" -o /tmp/hadoop.tar.gz \
-        && curl -fSL --retry 2 --connect-timeout 10 "${base}/hadoop-${HADOOP_VERSION}/${archive}.sha512" -o /tmp/hadoop.sha512 \
-        && python3 -c "import hashlib,pathlib,re; p=pathlib.Path('/tmp/hadoop.tar.gz'); actual=hashlib.sha512(p.read_bytes()).hexdigest(); expected=re.search(r'(?i)\b[0-9a-f]{128}\b',pathlib.Path('/tmp/hadoop.sha512').read_text()).group().lower(); assert actual==expected, 'Hadoop checksum mismatch'"; then \
-        downloaded=1; \
-        break; \
-      fi; \
+      for attempt in 1 2 3; do \
+        if sha512sum --check "${archive}.sha512"; then downloaded=1; break 2; fi; \
+        if curl -fSL --continue-at - --connect-timeout 10 --speed-limit 1024 --speed-time 60 "${base}/hadoop-${HADOOP_VERSION}/${archive}" -o "${archive}"; then \
+          if sha512sum --check "${archive}.sha512"; then downloaded=1; break 2; fi; \
+          rm -f "${archive}"; \
+        fi; \
+        sleep 2; \
+      done; \
     done; \
     test "$downloaded" = 1; \
-    tar -xzf /tmp/hadoop.tar.gz -C /opt \
-    && mv "/opt/hadoop-${HADOOP_VERSION}" /opt/hadoop \
-    && rm /tmp/hadoop.tar.gz /tmp/hadoop.sha512
+    tar -xzf "${archive}" -C /opt \
+    && mv "/opt/hadoop-${HADOOP_VERSION}" /opt/hadoop
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

@@ -19,7 +19,7 @@ if (-not $keyLine -or $keyLine -match '^\s*LLM_API_KEY\s*=\s*$') {
 
 $requiredData = @("users.dat", "movies.dat", "ratings.dat")
 foreach ($name in $requiredData) {
-    $path = Join-Path $script:ProjectRoot "ml-1m\ml-1m\$name"
+    $path = Join-Path $script:ProjectRoot "ml-1m\$name"
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Missing data file: $path"
     }
@@ -40,7 +40,7 @@ Write-Host "Using TUNA mirrors for Ubuntu, PyPI and Hadoop (lean package)."
 Write-Host "The first build still downloads a Java base image and about 489 MB of Hadoop files."
 $previousErrorAction = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-docker compose up --build --detach --wait --wait-timeout 300 --quiet-build --quiet-pull
+docker compose up --build --detach --wait --wait-timeout 300 --quiet-pull
 $composeExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorAction
 if ($composeExitCode -ne 0) {

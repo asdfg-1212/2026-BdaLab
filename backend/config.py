@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
-    data_dir: Path = ROOT / "ml-1m" / "ml-1m"
+    data_dir: Path = ROOT / "ml-1m"
     artifact_dir: Path = ROOT / "artifacts"
     hadoop_home: Path = Path("/opt/hadoop")
     hadoop_timeout: int = 1800
